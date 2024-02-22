@@ -7,6 +7,8 @@ import argparse
 import glob
 from ultralytics import YOLO
 from typing import List
+import memory_profiler
+
 
 logging.getLogger('ultralytics').handlers = [logging.NullHandler()]
 
@@ -28,17 +30,18 @@ def main():
     cam2_path = cam2_paths[0]
 
     video_extractor = VideoExtractor(cam1_path, cam2_path)
-    img_buffer = video_extractor.get_sequence(args.gap, args.frame_limit)
+    img_buffer = video_extractor.get_sequence(args.gap, args.start_frame, args.frame_limit)
     print(len(img_buffer))
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--src', type=str, default=r'D:\datasets\reid\polytech\Pair-1')
-    parser.add_argument('--dst', type=str, default=r'D:\datasets\reid\polytech\Pair-1')
+    parser.add_argument('--src', type=str, default='/mnt/data/reid_datasets/Pair-1')#r'D:\datasets\reid\polytech\Pair-1')
+    parser.add_argument('--dst', type=str, default='/mnt/data/reid_datasets/Pair-1')#r'D:\datasets\reid\polytech\Pair-1')
     parser.add_argument('--gap', type=int, default=100)
-    parser.add_argument('--frame_limit', type=int, default=1000)
+    parser.add_argument('--frame_limit', type=int, default=2000)
+    parser.add_argument('--start_frame', type=int, default=1100)
 
     args = parser.parse_args()
     return args
@@ -66,28 +69,38 @@ class VideoExtractor:
         print('fps1:', self.fps1)
         print('fps2:', self.fps2)
 
-    def get_sequence(self, gap: int, frame_limit: int):
-        img_buffer = []
+        self.frame_idx_buffer = []
+        
+
+    def get_sequence(self, gap: int, start_frame: int, frame_limit: int):
         last_seen_people = self.main_frame_count
         seen_people_at_least_once = False
+
+        if self.main_frame_count >= frame_limit:
+            return None
 
         while True:
             print(self.main_frame_count, self.frame_count_1, self.frame_count_2)
             ret, frame1, frame2 = self.read_frames()
 
+            if self.main_frame_count < start_frame:
+                last_seen_people = self.main_frame_count
+                continue
+
             if ret is False:
-                return img_buffer
+                return self.frame_idx_buffer
             
-            img_buffer.append([frame1, frame2])
+            self.frame_idx_buffer.append(self.main_frame_count)
 
             if seen_people_at_least_once and self.main_frame_count - last_seen_people > gap:
-                return img_buffer
+                # img_buffer[max(0, len(img_buffer) - gap):]
+                return self.frame_idx_buffer
             
             if self.main_frame_count - last_seen_people > gap:
-                img_buffer.pop(0)
+                self.frame_idx_buffer.pop(0)
             
             if self.main_frame_count > frame_limit:
-                return img_buffer
+                return self.frame_idx_buffer
             
             has_people = check_if_has_people(self.model, [frame1, frame2])
             if has_people:
