@@ -6,7 +6,7 @@ import time
 import argparse
 import glob
 from ultralytics import YOLO
-from typing import List
+from typing import List, Callable
 import memory_profiler
 
 
@@ -29,105 +29,111 @@ def main():
     cam1_path = cam1_paths[0]
     cam2_path = cam2_paths[0]
 
-    video_extractor = VideoExtractor(cam1_path, cam2_path)
-    img_buffer = video_extractor.get_sequence(args.gap, args.start_frame, args.frame_limit)
-    print(len(img_buffer))
+    video_extractor = VideoExtractor([cam1_path, cam2_path])
+    seq = video_extractor.get_sequence(args.gap, args.start_frame, args.frame_limit)
+    print(seq)
+    video_extractor.save_sequence(seq[0], seq[1], 'test_seq', save_frames)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--src', type=str, default='/mnt/data/reid_datasets/Pair-1')#r'D:\datasets\reid\polytech\Pair-1')
-    parser.add_argument('--dst', type=str, default='/mnt/data/reid_datasets/Pair-1')#r'D:\datasets\reid\polytech\Pair-1')
+    parser.add_argument('--src', type=str, default=r'D:\datasets\reid\polytech\Pair-1')
+    parser.add_argument('--dst', type=str, default=r'D:\datasets\reid\polytech\Pair-1')
     parser.add_argument('--gap', type=int, default=100)
-    parser.add_argument('--frame_limit', type=int, default=2000)
-    parser.add_argument('--start_frame', type=int, default=1100)
+    parser.add_argument('--frame_limit', type=int, default=5000)
+    parser.add_argument('--start_frame', type=int, default=1000)
 
     args = parser.parse_args()
     return args
 
 
 class VideoExtractor:
-    def __init__(self, cam1_path: str, cam2_path: str) -> None:
-        self.cam1_path = cam1_path
-        self.cam2_path = cam2_path
-
-        self.video1 = cv2.VideoCapture(cam1_path)
-        self.video2 = cv2.VideoCapture(cam2_path)
-
-        self.fps1 = self.video1.get(cv2.CAP_PROP_FPS)
-        self.fps2 = self.video2.get(cv2.CAP_PROP_FPS)
-
-        self.main_fps = min(self.fps1, self.fps2)
-
-        self.frame_count_1 = 0  # Counter of frames in video 1
-        self.frame_count_2 = 0  # Counter of frames in video 2
-        self.main_frame_count = 0
-
+    def __init__(self, cam_paths: List[str]) -> None:
+        self.cam_paths = cam_paths
+        self.videos = [cv2.VideoCapture(path) for path in self.cam_paths]
+        self.fps_list = [video.get(cv2.CAP_PROP_FPS) for video in self.videos]
+        
+        self.main_fps = min(self.fps_list)
         self.model = YOLO('yolov8s.pt')
 
-        print('fps1:', self.fps1)
-        print('fps2:', self.fps2)
+        self.frame_counts = [0 for v in self.videos]
+        self.main_frame_count = 0
 
-        self.frame_idx_buffer = []
+    def reset(self):
+        self.set_position(self, 0)
+
+
+    def get_sequence(self, gap: int, start_frame: int, stop_frame: int, last_seen_people=None):
         
-
-    def get_sequence(self, gap: int, start_frame: int, frame_limit: int):
-        last_seen_people = self.main_frame_count
+        self.set_position(start_frame)
+        
+        start_seq_idx = self.main_frame_count
+        end_seq_idx = self.main_frame_count
+        last_seen_people = last_seen_people or self.main_frame_count
         seen_people_at_least_once = False
 
-        if self.main_frame_count >= frame_limit:
-            return None
+        if self.main_frame_count >= stop_frame:
+            return start_seq_idx, end_seq_idx
 
         while True:
-            print(self.main_frame_count, self.frame_count_1, self.frame_count_2)
-            ret, frame1, frame2 = self.read_frames()
-
-            if self.main_frame_count < start_frame:
-                last_seen_people = self.main_frame_count
-                continue
+            print(self.main_frame_count, *self.frame_counts)
+            ret, frames = self.read_frames()
 
             if ret is False:
-                return self.frame_idx_buffer
+                return start_seq_idx, end_seq_idx
             
-            self.frame_idx_buffer.append(self.main_frame_count)
+            end_seq_idx = self.main_frame_count
 
             if seen_people_at_least_once and self.main_frame_count - last_seen_people > gap:
-                # img_buffer[max(0, len(img_buffer) - gap):]
-                return self.frame_idx_buffer
+                return start_seq_idx, end_seq_idx
             
             if self.main_frame_count - last_seen_people > gap:
-                self.frame_idx_buffer.pop(0)
+                start_seq_idx = self.main_frame_count - gap
             
-            if self.main_frame_count > frame_limit:
-                return self.frame_idx_buffer
+            if self.main_frame_count > stop_frame:
+                return start_seq_idx, end_seq_idx
             
-            has_people = check_if_has_people(self.model, [frame1, frame2])
+            has_people = check_if_has_people(self.model, frames)
             if has_people:
                 last_seen_people = self.main_frame_count
                 seen_people_at_least_once = True
                 print('people')
         
-        return img_buffer
-            
+        return start_seq_idx, end_seq_idx
+    
+    def save_sequence(self, start_idx: int, end_idx: int, dst: str, save_callback: Callable):
+        self.set_position(start_idx)
+        for i in range(start_idx, end_idx):
+            ret, frames = self.read_frames()
+            if not ret:
+                break
+            save_callback(dst, i, frames)
+
+
+    def set_position(self, pos: int):
+        for i, vid in enumerate(self.videos):
+            self.frame_counts[i] = pos * self.fps_list[i] // self.main_fps
+            vid.set(cv2.CAP_PROP_POS_FRAMES, self.frame_counts[i])
+    
+        self.main_frame_count = pos
+
     def read_frames(self):
-        ret1, ret2 = True, True
-        
-        # FPS gains (show how much main fps is bigger than the others)
-        fps_gain1 = self.main_fps / self.fps1
-        fps_gain2 = self.main_fps / self.fps2
-        
-        while self.frame_count_1 <= self.main_frame_count:
-            ret1, frame1 = self.video1.read()
-            self.frame_count_1 += fps_gain1
-        
-        while self.frame_count_2 <= self.main_frame_count:
-            ret2, frame2 = self.video2.read()
-            self.frame_count_2 += fps_gain2
+        ret = True
+        frames = []
+
+        for i in range(len(self.frame_counts)):
+            ret_i, frame = self.videos[i].read()
+            self.frame_counts[i] += 1
+            while self.frame_counts[i] * self.main_fps / self.fps_list[i] <= self.main_frame_count:
+                ret_i, frame = self.videos[i].read()
+                self.frame_counts[i] += 1
             
+            frames.append(frame)
+            ret &= ret_i
+
         self.main_frame_count += 1
-        common_ret = ret1 and ret2
-        return common_ret, frame1, frame2
+        return ret, frames            
 
 
 def read_frames(video1: cv2.VideoCapture, video2: cv2.VideoCapture, frame_count: int, cnt1: int, cnt2: int, fps_gain: float):
@@ -145,7 +151,12 @@ def read_frames(video1: cv2.VideoCapture, video2: cv2.VideoCapture, frame_count:
     return ret1 and ret2, frame1, frame2, cnt1, cnt2, frame_count
 
 
-def save_frames(dst: str, frame_count: int, frame1: np.ndarray, frame2: np.ndarray):
+def save_frames(dst: str, frame_count: int, frames: List[np.ndarray]):
+    os.makedirs(os.path.join(dst, '1'), exist_ok=True)
+    os.makedirs(os.path.join(dst, '2.1'), exist_ok=True)
+    os.makedirs(os.path.join(dst, '2.2'), exist_ok=True)
+    
+    frame1, frame2 = frames
     cv2.imwrite(os.path.join(dst, '1', f"{frame_count}.jpg"), frame1)
     cv2.imwrite(os.path.join(dst, '2.1', f"{frame_count}.jpg"), frame2[:len(frame2) // 2])
     cv2.imwrite(os.path.join(dst, '2.2', f"{frame_count}.jpg"), frame2[len(frame2) // 2:])
