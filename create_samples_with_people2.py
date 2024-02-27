@@ -30,9 +30,15 @@ def main():
     cam2_path = cam2_paths[0]
 
     video_extractor = VideoExtractor([cam1_path, cam2_path])
-    seq = video_extractor.get_sequence(args.gap, args.start_frame, args.frame_limit)
-    print(seq)
-    video_extractor.save_sequence(seq[0], seq[1], 'test_seq', save_frames)
+
+    start_frame = args.start_frame
+    for i in range(9, 20):
+        start_seq, end_seq = video_extractor.get_sequence(args.gap, start_frame, args.frame_limit)
+        print(start_seq, end_seq)
+        start_frame = max(0, end_seq - args.gap)
+        video_extractor.save_sequence(start_seq, end_seq, f'person_sequencies/seq_{i}', save_frames)
+        if end_seq >= args.frame_limit and args.frame_limit != -1:
+            break
 
 
 def parse_args():
@@ -40,9 +46,9 @@ def parse_args():
 
     parser.add_argument('--src', type=str, default=r'D:\datasets\reid\polytech\Pair-1')
     parser.add_argument('--dst', type=str, default=r'D:\datasets\reid\polytech\Pair-1')
-    parser.add_argument('--gap', type=int, default=100)
-    parser.add_argument('--frame_limit', type=int, default=5000)
-    parser.add_argument('--start_frame', type=int, default=1000)
+    parser.add_argument('--gap', type=int, default=24)
+    parser.add_argument('--frame_limit', type=int, default=-1)#5000)
+    parser.add_argument('--start_frame', type=int, default=8688)
 
     args = parser.parse_args()
     return args
@@ -55,7 +61,7 @@ class VideoExtractor:
         self.fps_list = [video.get(cv2.CAP_PROP_FPS) for video in self.videos]
         
         self.main_fps = min(self.fps_list)
-        self.model = YOLO('yolov8s.pt')
+        self.model = YOLO('yolov8n.pt')
 
         self.frame_counts = [0 for v in self.videos]
         self.main_frame_count = 0
@@ -64,7 +70,7 @@ class VideoExtractor:
         self.set_position(self, 0)
 
 
-    def get_sequence(self, gap: int, start_frame: int, stop_frame: int, last_seen_people=None):
+    def get_sequence(self, gap: int, start_frame: int, stop_frame: int = -1, last_seen_people=None):
         
         self.set_position(start_frame)
         
@@ -73,7 +79,7 @@ class VideoExtractor:
         last_seen_people = last_seen_people or self.main_frame_count
         seen_people_at_least_once = False
 
-        if self.main_frame_count >= stop_frame:
+        if stop_frame != -1 and self.main_frame_count >= stop_frame:
             return start_seq_idx, end_seq_idx
 
         while True:
@@ -91,7 +97,7 @@ class VideoExtractor:
             if self.main_frame_count - last_seen_people > gap:
                 start_seq_idx = self.main_frame_count - gap
             
-            if self.main_frame_count > stop_frame:
+            if stop_frame != -1 and self.main_frame_count > stop_frame:
                 return start_seq_idx, end_seq_idx
             
             has_people = check_if_has_people(self.model, frames)
@@ -105,6 +111,7 @@ class VideoExtractor:
     def save_sequence(self, start_idx: int, end_idx: int, dst: str, save_callback: Callable):
         self.set_position(start_idx)
         for i in range(start_idx, end_idx):
+            print('save', i)
             ret, frames = self.read_frames()
             if not ret:
                 break

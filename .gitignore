@@ -1,2 +1,5 @@
 venv
-                                                  
+**.pt
+.vscode
+person_sequencies
+
