@@ -2,4 +2,9 @@ venv
 **.pt
 .vscode
 person_sequencies
-
+test_seq
+cam2.jpg
+mot.txt
+trash
+poetry.lock
+**/__pycache__
