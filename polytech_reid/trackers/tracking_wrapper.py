@@ -39,7 +39,7 @@ class TrackingWrapper:
         if len(det) == 0:
             return None
         
-        tracks = self.tracker.update(det, None)
+        tracks = self.tracker.update(det.cls, det.xywh, det.conf, None)
         return tracks
 
         

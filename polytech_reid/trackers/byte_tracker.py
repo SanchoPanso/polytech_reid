@@ -250,7 +250,7 @@ class BYTETracker:
         self.kalman_filter = self.get_kalmanfilter()
         self.reset_id()
 
-    def update(self, results, img=None):
+    def update(self, cls: np.ndarray, bboxes_xywh: np.ndarray, scores: np.ndarray, img=None):
         """Updates object tracker with new detections and returns tracked object bounding boxes."""
         self.frame_id += 1
         activated_stracks = []
@@ -258,11 +258,11 @@ class BYTETracker:
         lost_stracks = []
         removed_stracks = []
 
-        scores = results.conf
-        bboxes = results.xywhr if hasattr(results, "xywhr") else results.xywh
+        # scores = conf
+        bboxes = bboxes_xywh    # results.xywhr if hasattr(results, "xywhr") else results.xywh
         # Add index
         bboxes = np.concatenate([bboxes, np.arange(len(bboxes)).reshape(-1, 1)], axis=-1)
-        cls = results.cls
+        # cls = results.cls
 
         remain_inds = scores > self.args.track_high_thresh
         inds_low = scores > self.args.track_low_thresh
